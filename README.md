@@ -12,6 +12,9 @@
 
 ![pinn_training](https://github.com/user-attachments/assets/ed983b92-3cb6-4be8-aacf-e58d01922489)
 
+</>
+
+![pinn_training_loss](https://github.com/user-attachments/assets/6508da97-d404-482d-808d-bb8acc3e062d)
 ​
 
 🔷 Why PINNs?
