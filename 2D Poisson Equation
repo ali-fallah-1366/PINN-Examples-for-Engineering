@@ -1,0 +1,161 @@
+# ==========================================================
+# 2D Poisson Equation using PINN (DeepXDE)
+# Analytical solution included
+# ==========================================================
+
+# Uncomment this line in Google Colab
+!pip install deepxde -q
+
+import deepxde as dde
+import numpy as np
+import matplotlib.pyplot as plt
+from deepxde.backend import tf
+
+dde.config.set_random_seed(1234)
+
+# ==========================================================
+# PDE definition
+# u_xx + u_yy = -2*pi^2*sin(pi*x)*sin(pi*y)
+# ==========================================================
+def poisson_pde(x, y):
+    u_xx = dde.grad.hessian(y, x, i=0, j=0)
+    u_yy = dde.grad.hessian(y, x, i=1, j=1)
+
+    f = -2 * np.pi**2 * tf.sin(np.pi * x[:, 0:1]) * tf.sin(np.pi * x[:, 1:2])
+
+    return u_xx + u_yy - f
+
+# ==========================================================
+# Analytical solution
+# ==========================================================
+def exact_solution(x):
+    X = x[:, 0:1]
+    Y = x[:, 1:2]
+    return np.sin(np.pi * X) * np.sin(np.pi * Y)
+
+# ==========================================================
+# Geometry: unit square [0,1] x [0,1]
+# ==========================================================
+geom = dde.geometry.Rectangle([0, 0], [1, 1])
+
+# ==========================================================
+# Boundary condition: u = 0 on all boundaries
+# ==========================================================
+def boundary(x, on_boundary):
+    return on_boundary
+
+bc = dde.icbc.DirichletBC(geom, lambda x: 0.0, boundary)
+
+# ==========================================================
+# Data
+# ==========================================================
+data = dde.data.PDE(
+    geom,
+    poisson_pde,
+    [bc],
+    num_domain=3000,
+    num_boundary=400,
+    num_test=10000,
+)
+
+# ==========================================================
+# Neural network
+# ==========================================================
+layer_size = [2] + [60] * 4 + [1]
+activation = "tanh"
+initializer = "Glorot uniform"
+
+net = dde.nn.FNN(layer_size, activation, initializer)
+
+model = dde.Model(data, net)
+
+# ==========================================================
+# Training with Adam
+# ==========================================================
+model.compile("adam", lr=1e-3)
+losshistory, train_state = model.train(iterations=10000)
+
+# ==========================================================
+# Optional refinement with L-BFGS
+# ==========================================================
+model.compile("L-BFGS")
+losshistory, train_state = model.train()
+
+# ==========================================================
+# Prediction grid
+# ==========================================================
+nx = 100
+ny = 100
+
+x = np.linspace(0, 1, nx)
+y = np.linspace(0, 1, ny)
+
+X, Y = np.meshgrid(x, y)
+XY = np.vstack((X.flatten(), Y.flatten())).T
+
+u_pred = model.predict(XY)
+u_exact = exact_solution(XY)
+
+U_pred = u_pred.reshape(ny, nx)
+U_exact = u_exact.reshape(ny, nx)
+U_error = np.abs(U_exact - U_pred)
+
+# ==========================================================
+# Relative L2 error
+# ==========================================================
+rel_l2 = np.linalg.norm(u_exact - u_pred) / np.linalg.norm(u_exact)
+print(f"Relative L2 error = {rel_l2:.6e}")
+
+# ==========================================================
+# Plot: analytical solution
+# ==========================================================
+plt.figure(figsize=(7, 5))
+plt.contourf(X, Y, U_exact, 100, cmap="jet")
+plt.colorbar(label="u")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.title("Analytical Solution")
+plt.show()
+
+# ==========================================================
+# Plot: PINN prediction
+# ==========================================================
+plt.figure(figsize=(7, 5))
+plt.contourf(X, Y, U_pred, 100, cmap="jet")
+plt.colorbar(label="u")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.title("PINN Prediction")
+plt.show()
+
+# ==========================================================
+# Plot: absolute error
+# ==========================================================
+plt.figure(figsize=(7, 5))
+plt.contourf(X, Y, U_error, 100, cmap="jet")
+plt.colorbar(label="|error|")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.title("Absolute Error")
+plt.show()
+
+# ==========================================================
+# Cross-section plot at y = 0.5
+# ==========================================================
+j_mid = ny // 2
+
+plt.figure(figsize=(7, 4))
+plt.plot(x, U_exact[j_mid, :], label="Analytical", linewidth=2)
+plt.plot(x, U_pred[j_mid, :], "--", label="PINN", linewidth=2)
+plt.xlabel("x")
+plt.ylabel("u(x, 0.5)")
+plt.title("Midline Comparison at y = 0.5")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# ==========================================================
+# Plot training loss
+# ==========================================================
+dde.utils.plot_loss_history(losshistory)
+plt.show()
