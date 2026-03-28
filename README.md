@@ -10,6 +10,7 @@
 
 <img width="1536" height="1024" alt="ChatGPT Image Mar 28, 2026, 01_38_24 PM" src="https://github.com/user-attachments/assets/cd4379a5-96d1-4811-9cd6-72184070e110" />
 
+![pinn_training](https://github.com/user-attachments/assets/ed983b92-3cb6-4be8-aacf-e58d01922489)
 
 ​
 
