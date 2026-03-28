@@ -1,0 +1,197 @@
+# ==========================================================
+# 1D Wave Equation using PINN (DeepXDE)
+# Analytical solution included
+# Google Colab ready
+# ==========================================================
+
+# Uncomment in Google Colab
+!pip install deepxde -q
+
+import deepxde as dde
+import numpy as np
+import matplotlib.pyplot as plt
+
+dde.config.set_random_seed(1234)
+
+# ==========================================================
+# Parameters
+# ==========================================================
+L = 1.0
+t_final = 1.0
+c = 1.0
+
+# ==========================================================
+# PDE: u_tt = c^2 u_xx
+# ==========================================================
+def wave_pde(x, y):
+    # x[:,0] = spatial coordinate
+    # x[:,1] = time coordinate
+    # y = u(x,t)
+
+    u_xx = dde.grad.hessian(y, x, i=0, j=0)
+    u_tt = dde.grad.hessian(y, x, i=1, j=1)
+
+    return u_tt - c**2 * u_xx
+
+# ==========================================================
+# Analytical solution
+# u(x,t) = sin(pi x) cos(c pi t)
+# ==========================================================
+def exact_solution(x):
+    X = x[:, 0:1]
+    T = x[:, 1:2]
+    return np.sin(np.pi * X) * np.cos(c * np.pi * T)
+
+# ==========================================================
+# Geometry and time domain
+# ==========================================================
+geom = dde.geometry.Interval(0, L)
+timedomain = dde.geometry.TimeDomain(0, t_final)
+geomtime = dde.geometry.GeometryXTime(geom, timedomain)
+
+# ==========================================================
+# Boundary conditions: u(0,t)=0, u(1,t)=0
+# ==========================================================
+def boundary(x, on_boundary):
+    return on_boundary
+
+bc = dde.icbc.DirichletBC(geomtime, lambda x: 0.0, boundary)
+
+# ==========================================================
+# Initial condition: u(x,0)=sin(pi x)
+# ==========================================================
+def initial_displacement(x):
+    return np.sin(np.pi * x[:, 0:1])
+
+ic_u = dde.icbc.IC(
+    geomtime,
+    initial_displacement,
+    lambda _, on_initial: on_initial
+)
+
+# ==========================================================
+# Initial velocity: u_t(x,0)=0
+# DeepXDE OperatorBC is used
+# ==========================================================
+def initial_velocity(x, y, _):
+    du_t = dde.grad.jacobian(y, x, i=0, j=1)
+    return du_t
+
+ic_ut = dde.icbc.OperatorBC(
+    geomtime,
+    initial_velocity,
+    lambda x, on_boundary: np.isclose(x[1], 0.0)
+)
+
+# ==========================================================
+# Data
+# ==========================================================
+data = dde.data.TimePDE(
+    geomtime,
+    wave_pde,
+    [bc, ic_u, ic_ut],
+    num_domain=3000,
+    num_boundary=200,
+    num_initial=200,
+    num_test=10000,
+)
+
+# ==========================================================
+# Neural network
+# ==========================================================
+layer_size = [2] + [60] * 4 + [1]
+activation = "tanh"
+initializer = "Glorot uniform"
+
+net = dde.nn.FNN(layer_size, activation, initializer)
+
+model = dde.Model(data, net)
+
+# ==========================================================
+# Training with Adam
+# ==========================================================
+model.compile("adam", lr=1e-3)
+losshistory, train_state = model.train(iterations=10000)
+
+# ==========================================================
+# Optional refinement with L-BFGS
+# ==========================================================
+model.compile("L-BFGS")
+losshistory, train_state = model.train()
+
+# ==========================================================
+# Prediction grid
+# ==========================================================
+nx = 200
+nt = 200
+
+x = np.linspace(0, L, nx)
+t = np.linspace(0, t_final, nt)
+
+X, T = np.meshgrid(x, t)
+XT = np.vstack((X.flatten(), T.flatten())).T
+
+u_pred = model.predict(XT)
+u_exact = exact_solution(XT)
+
+U_pred = u_pred.reshape(nt, nx)
+U_exact = u_exact.reshape(nt, nx)
+U_error = np.abs(U_exact - U_pred)
+
+# ==========================================================
+# Relative L2 error
+# ==========================================================
+rel_l2 = np.linalg.norm(u_exact - u_pred) / np.linalg.norm(u_exact)
+print(f"Relative L2 error = {rel_l2:.6e}")
+
+# ==========================================================
+# Plot: solution at final time
+# ==========================================================
+plt.figure(figsize=(8, 5))
+plt.plot(x, U_exact[-1, :], label="Analytical", linewidth=2)
+plt.plot(x, U_pred[-1, :], "--", label="PINN", linewidth=2)
+plt.xlabel("x")
+plt.ylabel("u(x,t_final)")
+plt.title("1D Wave Equation: Solution at Final Time")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# ==========================================================
+# Plot: contour of analytical solution
+# ==========================================================
+plt.figure(figsize=(8, 5))
+plt.contourf(X, T, U_exact, 100, cmap="jet")
+plt.colorbar(label="u")
+plt.xlabel("x")
+plt.ylabel("t")
+plt.title("Analytical Solution")
+plt.show()
+
+# ==========================================================
+# Plot: contour of PINN prediction
+# ==========================================================
+plt.figure(figsize=(8, 5))
+plt.contourf(X, T, U_pred, 100, cmap="jet")
+plt.colorbar(label="u")
+plt.xlabel("x")
+plt.ylabel("t")
+plt.title("PINN Prediction")
+plt.show()
+
+# ==========================================================
+# Plot: absolute error
+# ==========================================================
+plt.figure(figsize=(8, 5))
+plt.contourf(X, T, U_error, 100, cmap="jet")
+plt.colorbar(label="|error|")
+plt.xlabel("x")
+plt.ylabel("t")
+plt.title("Absolute Error")
+plt.show()
+
+# ==========================================================
+# Plot: training loss
+# ==========================================================
+dde.utils.plot_loss_history(losshistory)
+plt.show()
