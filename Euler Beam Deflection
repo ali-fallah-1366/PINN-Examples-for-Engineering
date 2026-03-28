@@ -1,0 +1,157 @@
+# ============================================================
+# Simply Supported Euler-Bernoulli Beam using DeepXDE
+# PINN solution + analytical solution comparison
+# Google Colab ready
+# ============================================================
+
+# If running in Google Colab, uncomment:
+!pip install deepxde -q
+
+import deepxde as dde
+import numpy as np
+import matplotlib.pyplot as plt
+
+# For reproducibility
+dde.config.set_random_seed(1234)
+
+# ============================================================
+# Problem parameters
+# ============================================================
+L = 1.0          # Beam length
+E = 1.0          # Young's modulus
+I = 1.0          # Second moment of area
+q = 1.0          # Uniform distributed load
+
+# ============================================================
+# Governing ODE: EI * w'''' = q
+# => w'''' - q/(EI) = 0
+# ============================================================
+def beam_pde(x, y):
+    # y = w(x)
+    # First derivative
+    dy_x = dde.grad.jacobian(y, x, i=0, j=0)
+    # Second derivative
+    dy_xx = dde.grad.hessian(y, x, i=0, j=0)
+    # Third derivative
+    dy_xxx = dde.grad.jacobian(dy_xx, x, i=0, j=0)
+    # Fourth derivative
+    dy_xxxx = dde.grad.jacobian(dy_xxx, x, i=0, j=0)
+
+    return E * I * dy_xxxx - q
+
+
+# ============================================================
+# Analytical solution
+# w(x)= q/(24EI) * (x^4 - 2Lx^3 + L^3 x)
+# ============================================================
+def w_exact(x):
+    x = np.array(x)
+    return q / (24 * E * I) * (x**4 - 2 * L * x**3 + L**3 * x)
+
+
+# ============================================================
+# Geometry
+# ============================================================
+geom = dde.geometry.Interval(0.0, L)
+
+
+# ============================================================
+# Boundary identification
+# ============================================================
+def left_boundary(x, on_boundary):
+    return on_boundary and np.isclose(x[0], 0.0)
+
+def right_boundary(x, on_boundary):
+    return on_boundary and np.isclose(x[0], L)
+
+
+# ============================================================
+# Simply supported BCs:
+# w(0)=0, w(L)=0, w''(0)=0, w''(L)=0
+# ============================================================
+
+# Essential BCs: displacement = 0
+bc_w_left = dde.icbc.DirichletBC(geom, lambda x: 0.0, left_boundary)
+bc_w_right = dde.icbc.DirichletBC(geom, lambda x: 0.0, right_boundary)
+
+# Natural BCs: bending moment M = EI w'' = 0  -> w''=0
+def d2y_dx2(x, y, _):
+    return dde.grad.hessian(y, x, i=0, j=0)
+
+bc_m_left = dde.icbc.OperatorBC(geom, d2y_dx2, left_boundary)
+bc_m_right = dde.icbc.OperatorBC(geom, d2y_dx2, right_boundary)
+
+
+# ============================================================
+# Data object
+# ============================================================
+data = dde.data.PDE(
+    geom,
+    beam_pde,
+    [bc_w_left, bc_w_right, bc_m_left, bc_m_right],
+    num_domain=80,
+    num_boundary=8,
+    num_test=200,
+)
+
+# ============================================================
+# Neural network
+# ============================================================
+layer_size = [1] + [50] * 3 + [1]
+activation = "tanh"
+initializer = "Glorot uniform"
+
+net = dde.nn.FNN(layer_size, activation, initializer)
+
+model = dde.Model(data, net)
+
+# ============================================================
+# Training
+# ============================================================
+model.compile("adam", lr=1e-3)
+losshistory, train_state = model.train(iterations=10000)
+
+# Optional refinement with L-BFGS
+model.compile("L-BFGS")
+losshistory, train_state = model.train()
+
+# ============================================================
+# Prediction
+# ============================================================
+x_plot = np.linspace(0, L, 400)[:, None]
+w_pred = model.predict(x_plot)
+w_true = w_exact(x_plot)
+
+# Relative L2 error
+rel_l2 = np.linalg.norm(w_pred - w_true) / np.linalg.norm(w_true)
+print(f"Relative L2 error = {rel_l2:.6e}")
+
+# ============================================================
+# Plot solution comparison
+# ============================================================
+plt.figure(figsize=(8, 5))
+plt.plot(x_plot, w_true, label="Analytical", linewidth=2)
+plt.plot(x_plot, w_pred, "--", label="PINN", linewidth=2)
+plt.xlabel("x")
+plt.ylabel("Deflection w(x)")
+plt.title("Simply Supported Beam under Uniform Load")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# ============================================================
+# Plot absolute error
+# ============================================================
+plt.figure(figsize=(8, 5))
+plt.plot(x_plot, np.abs(w_pred - w_true), linewidth=2)
+plt.xlabel("x")
+plt.ylabel("|Error|")
+plt.title("Absolute Error")
+plt.grid(True)
+plt.show()
+
+# ============================================================
+# Plot training loss
+# ============================================================
+dde.utils.plot_loss_history(losshistory)
+plt.show()
